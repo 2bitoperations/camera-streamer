@@ -121,6 +121,31 @@ retry_resolution_set:
     buf_list->fmt.sizeimage = v4l2_fmt.fmt.pix.sizeimage;
   }
 
+  // If the driver shrank sizeimage (e.g. aligning 1080 rows down to a 32-row
+  // boundary gives 1056), try overriding it before REQBUFS. For raw formats
+  // (bytesperline > 0) we round the height UP to the next 32-row multiple so
+  // the size is still a valid aligned value the driver is likely to accept,
+  // while guaranteeing room for the full source frame.
+  if (fmt.sizeimage > 0 && fmt.sizeimage > buf_list->fmt.sizeimage) {
+    unsigned target_sizeimage = fmt.sizeimage;
+    if (buf_list->fmt.bytesperline > 0) {
+      unsigned aligned_height = (buf_list->fmt.height + 31) / 32 * 32;
+      unsigned rounded_sizeimage = aligned_height * buf_list->fmt.bytesperline;
+      if (rounded_sizeimage > target_sizeimage)
+        target_sizeimage = rounded_sizeimage;
+    }
+    if (buf_list->v4l2->do_mplanes) {
+      v4l2_fmt.fmt.pix_mp.plane_fmt[0].sizeimage = target_sizeimage;
+    } else {
+      v4l2_fmt.fmt.pix.sizeimage = target_sizeimage;
+    }
+    if (ioctl_retried(buf_list->name, buf_list->v4l2->dev_fd, VIDIOC_S_FMT, &v4l2_fmt) >= 0) {
+      buf_list->fmt.sizeimage = buf_list->v4l2->do_mplanes
+        ? v4l2_fmt.fmt.pix_mp.plane_fmt[0].sizeimage
+        : v4l2_fmt.fmt.pix.sizeimage;
+    }
+  }
+
   if (buf_list->fmt.width != fmt.width || buf_list->fmt.height != fmt.height) {
     if (fmt.bytesperline) {
       LOG_INFO(buf_list, "Requested resolution=%ux%u is unavailable. Got %ux%u.",
